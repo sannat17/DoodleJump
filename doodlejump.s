@@ -21,13 +21,50 @@
 	addi $s2, $s3, 4032	# $s2 stores start value of the doodle
 	
 start_screen: 	
+		# Start with platforms every 3 rows
 		jal bgPaint
-	
-		addi $a1, $s3, 256
+		
+		# Generate a random number between 0 and 120 to be added to start address of each row
+		# This row + random number value will give us start location of each platform
+		
+		# Platform 1: row no. = cache base + 4096 - 128 * 8 (4th row from bottom)
+		li $v0, 42
+		li $a0, 0
+		li $a1, 25
+		syscall
+		mul $a0, $a0, 4
+		addi $a1, $s3, 3072
+		add $a1, $a1, $a0
 		jal MakePlatform
-		addi $a1, $s3, 2000
+		
+		# Platform 2: row no. = cache base + 4096 - 128 * 12 (4th row from bottom)
+		li $v0, 42
+		li $a0, 0
+		li $a1, 25
+		syscall
+		mul $a0, $a0, 4
+		addi $a1, $s3, 2560
+		add $a1, $a1, $a0
 		jal MakePlatform
-		addi $a1, $s3, 3000
+		
+		# Platform 3: row no. = cache base + 4096 - 128 * 16 (4th row from bottom)
+		li $v0, 42
+		li $a0, 0
+		li $a1, 25
+		syscall
+		mul $a0, $a0, 4
+		addi $a1, $s3, 2048
+		add $a1, $a1, $a0
+		jal MakePlatform
+		
+		# Platform 4: row no. = cache base + 4096 - 128 * 20 (4th row from bottom)
+		li $v0, 42
+		li $a0, 0
+		li $a1, 25
+		syscall
+		mul $a0, $a0, 4
+		addi $a1, $s3, 1536
+		add $a1, $a1, $a0
 		jal MakePlatform
 	
 		move $a0, $s2
@@ -45,10 +82,16 @@ wait_to_start:
 start_if_s:	
 		lw $t7, 0xffff0004
 		beq $t7, 115, start_game
+		j wait_to_start
 
 start_game:	
 		move $a0, $s2
-		j bounce
+		jal bounce
+
+game_over:	
+		jal bgPaint
+		jal loadBuffer
+		
 
 		
 # --------
@@ -174,7 +217,7 @@ end_bgPaintLoop:
 		jr $ra
 
 # === Platform maker function ===
-#  - Input $a1 the left-most address from where to start building the platform
+#  - Input $a1 the left-most address from where to start building the platform for 8 pixels
 #  - Platform is made into entity cache by storing it's location values as 2
 MakePlatform:	li $t0, 2 # $t0 stores the limegreen color
 		sw $t0, ($a1)
@@ -243,40 +286,69 @@ moveDown:	lw $t0, ($a0) # Store into $t0 the cache value at $a0 which is 1 or 3 
 		addi $v0, $a0, 128 # Return in $v0 what the new location of the doodle should be (moved down)
 		jr $ra
 
+# === Move left ===
+#  - Input $a0 the current location of the doodle
+#  - Return $v0 the updated location of the doodle (moved left)
+moveLeft:	lw $t0, ($a0) # Store into $t0 the cache value at $a0 which is 1 or 3 if the doodle exists there
+		subi $t0, $t0, 1 # Subtracting 1 from the cache value tells us if there should be bg or platform when doodle moves
+		sw $t0, ($a0) # Store what should be at $a0 in cache when doodle moves
+		
+		lw $t0, -4($a0) # Load the value from cache to the left of the doodle's current location at $a0
+		addi $t0, $t0, 1 # Add 1 to that value to show now there should be a doodle or doodle + platform
+		sw $t0, -4($a0) # Store this updated value to reflect existence of doodle to the left of current location
+		
+		addi $v0, $a0, -4 # Return in $v0 what the new location of the doodle should be (moved left)
+		jr $ra
+		
+# === Move right ===
+#  - Input $a0 the current location of the doodle
+#  - Return $v0 the updated location of the doodle (moved right)
+moveRight:	lw $t0, ($a0) # Store into $t0 the cache value at $a0 which is 1 or 3 if the doodle exists there
+		subi $t0, $t0, 1 # Subtracting 1 from the cache value tells us if there should be bg or platform when doodle moves
+		sw $t0, ($a0) # Store what should be at $a0 in cache when doodle moves
+		
+		lw $t0, 4($a0) # Load the value from cache to the right of the doodle's current location at $a0
+		addi $t0, $t0, 1 # Add 1 to that value to show now there should be a doodle or doodle + platform
+		sw $t0, 4($a0) # Store this updated value to reflect existence of doodle to the right of current location
+		
+		addi $v0, $a0, 4 # Return in $v0 what the new location of the doodle should be (moved right)
+		jr $ra
+
 
 # === Bounce ===
 #  - Input $a0 as the current location of the doodle (in cache)
 #  - This function will update the location in cache, move the cache to buffer and load the new buffer to screen
 #  - Output $v1 as the updated location of the dooodle in cache
 bounce:		li $t0, 0 		# Initialize the counter $t0 to track how many frames since last moveUp
-		li $t1, 0		# Initialize $t1 to track how many pixels moved up since bounce
+		li $t1, 0		# Initialize $t1 to track how many times moveUp has been called since bounce
 		move $t2, $a0		# Let $t2 store current address of the doodle (in cache)
+		li $t3, 10
 
-bounceLoop:			
-		beq $t0, 10, bounceUp
-		j bounce_cont
-				
+bounceLoop:	
+		ble $t1, 10, bounceUp
+		beq $t0, $t3, bounceDown
 		
-bounceUp:	subi $sp, $sp, 4	# Move Stack pointer to prepare for push
-		sw $ra, ($sp)		# ... Push return address of current function $ra onto the stack
-		subi $sp, $sp, 4
-		sw $t0, ($sp)
-		subi $sp, $sp, 4
-		sw $t1, ($sp)
-		subi $sp, $sp, 4
-		sw $t2, ($sp)
+		j bounce_cont
+		
+bounceUp:	
+		bne $t0, $t1, bounce_cont
+		
+		subi $sp, $sp, 16	# Move Stack pointer to prepare for push
+		sw $ra, 16($sp)		# ... Push return address of current function $ra onto the stack
+		sw $t0, 12($sp)
+		sw $t1, 8($sp)
+		sw $t2, 4($sp)
+		sw $t3, 0($sp)
 		
 		move $a0, $t2 
 		jal moveUp
 		
-		lw $t2, ($sp)		# pop
-		addi $sp, $sp, 4	# Update $sp to reflect pop
-		lw $t1, ($sp)		# pop
-		addi $sp, $sp, 4	# Update $sp to reflect pop
-		lw $t0, ($sp)		# pop
-		addi $sp, $sp, 4	# Update $sp to reflect pop
-		lw $ra, ($sp)		# pop
-		addi $sp, $sp, 4	# Move the stack pointer $sp to reflect the pop
+		lw $t3, 0($sp)		# pop
+		lw $t2, 4($sp)		# pop
+		lw $t1, 8($sp)		# pop
+		lw $t0, 12($sp)		# pop
+		lw $ra, 16($sp)		# pop
+		addi $sp, $sp, 16	# Move the stack pointer $sp to reflect the pop
 		
 		move $t2, $v0		# Update the doodle's location in cache (tracked by $t2) to be the new location given by $v0	
 		
@@ -284,53 +356,141 @@ bounceUp:	subi $sp, $sp, 4	# Move Stack pointer to prepare for push
 		addi $t1, $t1, 1		# Increase moveUp track by 1
 		
 		j bounce_cont
+		
+bounceDown:	
+		addi $t7, $s3, 3968		# Store into $t7 the minimum address value for bottom row in entity cache
+		bge $t2, $t7, endBounce		# If doodle's location in cache is at bottom, bounceDown should end the game
+		
+		lw $t8, 128($t2)		# Check the cache entity value right below doodle's middle leg
+		beq $t8, 2, bounce_again	# bounce again if there is a platform right under the doodle while moving down
+		
+		# TODO: Add a branch statement to recall "bounce" if there is a platform under current location of doodle
+		
+		subi $sp, $sp, 16	# Move Stack pointer to prepare for push
+		sw $ra, 16($sp)		# ... Push return address of current function $ra onto the stack
+		sw $t0, 12($sp)
+		sw $t1, 8($sp)
+		sw $t2, 4($sp)
+		sw $t3, 0($sp)
+		
+		move $a0, $t2 
+		jal moveDown
+		
+		lw $t3, 0($sp)		# pop
+		lw $t2, 4($sp)		# pop
+		lw $t1, 8($sp)		# pop
+		lw $t0, 12($sp)		# pop
+		lw $ra, 16($sp)		# pop
+		addi $sp, $sp, 16	# Move the stack pointer $sp to reflect the pop
+		
+		move $t2, $v0		# Update the doodle's location in cache (tracked by $t2) to be the new location given by $v0	
+		
+		li $t0, 0		# reset frames since last moveUp to 0
+		bge $t3, 4, bounce_down_counter_decrease
+		
+		j bounce_cont
+		
+bounce_down_counter_decrease:
+		subi $t3, $t3, 1
+		j bounce_cont
+
+bounce_again:	move $a0, $t2
+		j bounce
 
 bounce_cont:	
+		
 		li $v0, 32		# Load into $v0 the value for syscall required for sleep function
-		li $a0, 10		# Load into $a0 the number of milliseconds to wait
+		li $a0, 1		# Load into $a0 the number of milliseconds to wait
 		syscall			# Call the sleep function
 		
-		subi $sp, $sp, 4	# Move Stack pointer to prepare for push
-		sw $ra, ($sp)		# ... Push return address of current function $ra onto the stack
-		subi $sp, $sp, 4
-		sw $t0, ($sp)
-		subi $sp, $sp, 4
-		sw $t1, ($sp)
-		subi $sp, $sp, 4
-		sw $t2, ($sp)
+		subi $sp, $sp, 16	# Move Stack pointer to prepare for push
+		sw $ra, 16($sp)		# ... Push return address of current function $ra onto the stack
+		sw $t0, 12($sp)
+		sw $t1, 8($sp)
+		sw $t2, 4($sp)
+		sw $t3, 0($sp)
 		
 		jal cache_to_buffer
 		
-		lw $t2, ($sp)		# pop
-		addi $sp, $sp, 4	# Update $sp to reflect pop
-		lw $t1, ($sp)		# pop
-		addi $sp, $sp, 4	# Update $sp to reflect pop
-		lw $t0, ($sp)		# pop
-		addi $sp, $sp, 4	# Update $sp to reflect pop
-		lw $ra, ($sp)		# pop
-		addi $sp, $sp, 4	# Move the stack pointer $sp to reflect the pop
+		lw $t3, 0($sp)		# pop
+		lw $t2, 4($sp)		# pop
+		lw $t1, 8($sp)		# pop
+		lw $t0, 12($sp)		# pop
+		lw $ra, 16($sp)		# pop
+		addi $sp, $sp, 16	# Move the stack pointer $sp to reflect the pop
 		
-		subi $sp, $sp, 4	# Move Stack pointer to prepare for push
-		sw $ra, ($sp)		# ... Push return address of current function $ra onto the stack
-		subi $sp, $sp, 4
-		sw $t0, ($sp)
-		subi $sp, $sp, 4
-		sw $t1, ($sp)
-		subi $sp, $sp, 4
-		sw $t2, ($sp)
+		subi $sp, $sp, 16	# Move Stack pointer to prepare for push
+		sw $ra, 16($sp)		# ... Push return address of current function $ra onto the stack
+		sw $t0, 12($sp)
+		sw $t1, 8($sp)
+		sw $t2, 4($sp)
+		sw $t3, 0($sp)
 		
 		jal loadBuffer
 		
-		lw $t2, ($sp)		# pop
-		addi $sp, $sp, 4	# Update $sp to reflect pop
-		lw $t1, ($sp)		# pop
-		addi $sp, $sp, 4	# Update $sp to reflect pop
-		lw $t0, ($sp)		# pop
-		addi $sp, $sp, 4	# Update $sp to reflect pop
-		lw $ra, ($sp)		# pop
-		addi $sp, $sp, 4	# Move the stack pointer $sp to reflect the pop
+		lw $t3, 0($sp)		# pop
+		lw $t2, 4($sp)		# pop
+		lw $t1, 8($sp)		# pop
+		lw $t0, 12($sp)		# pop
+		lw $ra, 16($sp)		# pop
+		addi $sp, $sp, 16	# Move the stack pointer $sp to reflect the pop
+		
 		
 		addi $t0, $t0, 1
 		
+		lw $t8, 0xffff0000
+		beq $t8, 1, go_leftright
+		
 		j bounceLoop
+
+go_leftright:
+		lw $t8, 0xffff0004
+		beq $t8, 106, go_left	# Ascii value for "j" is 106
+		beq $t8, 107, go_right
+		j bounceLoop
+
+go_left:
+		subi $sp, $sp, 16	# Move Stack pointer to prepare for push
+		sw $ra, 16($sp)		# ... Push return address of current function $ra onto the stack
+		sw $t0, 12($sp)
+		sw $t1, 8($sp)
+		sw $t2, 4($sp)
+		sw $t3, 0($sp)
+		
+		move $a0, $t2 
+		jal moveLeft
+		
+		lw $t3, 0($sp)		# pop
+		lw $t2, 4($sp)		# pop
+		lw $t1, 8($sp)		# pop
+		lw $t0, 12($sp)		# pop
+		lw $ra, 16($sp)		# pop
+		addi $sp, $sp, 16	# Move the stack pointer $sp to reflect the pop
+		
+		move $t2, $v0		# Update the doodle's location in cache (tracked by $t2) to be the new location given by $v0
+		
+		j bounceLoop
+go_right:
+		subi $sp, $sp, 16	# Move Stack pointer to prepare for push
+		sw $ra, 16($sp)		# ... Push return address of current function $ra onto the stack
+		sw $t0, 12($sp)
+		sw $t1, 8($sp)
+		sw $t2, 4($sp)
+		sw $t3, 0($sp)
+		
+		move $a0, $t2 
+		jal moveRight
+		
+		lw $t3, 0($sp)		# pop
+		lw $t2, 4($sp)		# pop
+		lw $t1, 8($sp)		# pop
+		lw $t0, 12($sp)		# pop
+		lw $ra, 16($sp)		# pop
+		addi $sp, $sp, 16	# Move the stack pointer $sp to reflect the pop
+		
+		move $t2, $v0		# Update the doodle's location in cache (tracked by $t2) to be the new location given by $v0
+		
+		j bounceLoop
+
+endBounce:	jr $ra
 		
